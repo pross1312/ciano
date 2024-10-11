@@ -1,17 +1,19 @@
 #include <stdint.h>
+#include <ctype.h>
 #include <assert.h>
 #include <stdio.h>
 #include <math.h>
 #include <raylib.h>
 
-#define MAX_SAMPLES_PER_UPDATE   4096
+#define MAX_SAMPLES_PER_UPDATE   412
 #define SAMPLE_RATE 44100
 #define NOTE_INC 1.0594630943592953f // 2^12
 #define BASE_FREQUENCY 261.63f
-#define MAX_AMPLITUDE 12000.0f
-#define FADE_TIME 0.15f // second
-#define FADE_SAMPLE_COUNT (SAMPLE_RATE*FADE_TIME)
-#define AMP_PER_SAMPLE (MAX_AMPLITUDE/FADE_SAMPLE_COUNT)
+#define MAX_AMPLITUDE 8000.0f
+#define FADE_IN_TIME 0.15f // second
+#define FADE_OUT_TIME 0.6f // second
+#define FADE_IN_SAMPLE_COUNT (SAMPLE_RATE*FADE_IN_TIME)
+#define FADE_OUT_SAMPLE_COUNT (SAMPLE_RATE*FADE_OUT_TIME)
 
 typedef enum {
     PHASE_STOP = 0,
@@ -30,12 +32,13 @@ typedef struct {
     Phase phase;
 } Note;
 
-#define NOTES_COUNT 13
-Note notes[NOTES_COUNT] = {0};
 size_t active_notes = 0;
-const char note_keys[NOTES_COUNT] = {
-    'Q', '2', 'W', '3', 'E', 'R', '5', 'T', '6', 'Y', '7', 'U', 'I'
+const char note_keys[] = {
+    'q', '2', 'w', '3', 'e', 'r', '5', 't', '6', 'y', '7', 'u',
+    'a',
 };
+#define NOTES_COUNT sizeof(note_keys)/sizeof(*note_keys)
+Note notes[NOTES_COUNT] = {0};
 
 
 void start_note(Note *note) {
@@ -57,6 +60,7 @@ void set_note_max_amplitude(Note *note, float new_max_amplitude) {
 
 // 44100 sample/second
 float get_note_amplitude(Note *note) {
+    // TraceLog(LOG_INFO, "%zu %f", active_notes, note->max_amplitude);
     float result = 0;
     switch (note->phase) {
     case PHASE_STOP:
@@ -67,7 +71,7 @@ float get_note_amplitude(Note *note) {
             note->phase = PHASE_PLAYING;
             note->amplitude = note->max_amplitude;
         } else {
-            note->amplitude += note->max_amplitude/FADE_SAMPLE_COUNT;
+            note->amplitude += note->max_amplitude/FADE_IN_SAMPLE_COUNT;
         }
         break;
     case PHASE_FADE_OUT:
@@ -76,7 +80,7 @@ float get_note_amplitude(Note *note) {
             note->amplitude = 0;
             note->sineidx = 0;
         } else {
-            note->amplitude -= note->max_amplitude/FADE_SAMPLE_COUNT;
+            note->amplitude -= note->max_amplitude/FADE_OUT_SAMPLE_COUNT;
         }
         break;
     case PHASE_FADE_UP:
@@ -85,9 +89,9 @@ float get_note_amplitude(Note *note) {
             note->amplitude = note->max_amplitude;
         } else {
             if (active_notes == 1) {
-                note->amplitude += note->max_amplitude/FADE_SAMPLE_COUNT;
+                note->amplitude += note->max_amplitude/FADE_IN_SAMPLE_COUNT;
             } else {
-                note->amplitude += (note->max_amplitude/FADE_SAMPLE_COUNT)/(active_notes-1);
+                note->amplitude += (note->max_amplitude/FADE_IN_SAMPLE_COUNT)/(active_notes-1);
             }
         }
         break;
@@ -97,9 +101,9 @@ float get_note_amplitude(Note *note) {
             note->amplitude = note->max_amplitude;
         } else {
             if (active_notes == 1) {
-                note->amplitude -= note->max_amplitude/FADE_SAMPLE_COUNT;
+                note->amplitude -= note->max_amplitude/FADE_IN_SAMPLE_COUNT;
             } else {
-                note->amplitude -= (note->max_amplitude/FADE_SAMPLE_COUNT)/(active_notes-1);
+                note->amplitude -= (note->max_amplitude/FADE_IN_SAMPLE_COUNT)/(active_notes-1);
             }
         }
         break;
@@ -108,9 +112,9 @@ float get_note_amplitude(Note *note) {
         break;
     }
 
-    // result = note->amplitude * (2.0f * fabsf(2.0f * note->sineidx - 1.0f) - 1.0f);
-    // result = note->amplitude * (note->sineidx < 0.5f ? 1.0f : -1.0f);
-    result = note->amplitude * sinf(2*PI*note->sineidx);
+    result = note->amplitude * (2.0f * fabsf(2.0f * note->sineidx - 1.0f) - 1.0f); // triangle wave
+    // result = note->amplitude * (note->sineidx < 0.5f ? 1.0f : -1.0f); // square wave
+    // result = note->amplitude * sinf(2*PI*note->sineidx);           // sine wave
     note->sineidx += note->frequency/SAMPLE_RATE;
     if (note->sineidx >= 1.0f) note->sineidx -= 1.0f;
     return result;
@@ -128,6 +132,20 @@ void AudioInputCallback(void *buffer, unsigned int samples)
         }
         d[i] = (int16_t)amplitude;
     }
+}
+
+bool check_note_pressed(char note_key) {
+    if (isdigit(note_key)) {
+        return IsKeyPressed(note_key);
+    } else if (toupper(note_key) != note_key) {
+        return IsKeyUp(KEY_LEFT_SHIFT) && IsKeyUp(KEY_RIGHT_SHIFT) && IsKeyPressed(toupper(note_key));
+    } else {
+        return (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) && IsKeyPressed(toupper(note_key));
+    }
+}
+
+bool check_note_released(char note_key) {
+    return IsKeyReleased(toupper(note_key));
 }
 
 int main() {
@@ -151,7 +169,7 @@ int main() {
         BeginDrawing();
         ClearBackground(BLACK);
         for (size_t i = 0; i < NOTES_COUNT; i++) {
-            if (IsKeyPressed(note_keys[i])) {
+            if (check_note_pressed(note_keys[i])) {
                 start_note(&notes[i]);
                 notes[i].max_amplitude = MAX_AMPLITUDE/fmax(active_notes, 1);
                 for (size_t j = 0; j < NOTES_COUNT; j++) {
@@ -159,7 +177,7 @@ int main() {
                         set_note_max_amplitude(&notes[j], MAX_AMPLITUDE/fmax(active_notes, 1));
                     }
                 }
-            } else if (IsKeyReleased(note_keys[i])) {
+            } else if (notes[i].phase != PHASE_STOP && check_note_released(note_keys[i])) {
                 stop_note(&notes[i]);
                 notes[i].max_amplitude = MAX_AMPLITUDE/fmax(active_notes, 1);
                 for (size_t j = 0; j < NOTES_COUNT; j++) {
